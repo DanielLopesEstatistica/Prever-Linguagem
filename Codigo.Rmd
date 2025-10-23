@@ -1,0 +1,170 @@
+
+
+```{r}
+pares_possiveis = expand.grid(letters, letters)
+pares_possiveis = paste0(pares_possiveis$Var1, pares_possiveis$Var2) |> sort()
+
+set.seed(236081)
+
+get_letter_pairs = function(word) {
+    substrings = substring(word, 1:(nchar(word) - 1), 2:nchar(word))
+    contagem = table(substrings) |> unlist()
+    contagem = list(contagem)
+    return(contagem)
+}
+
+get_letter_pairs = Vectorize(get_letter_pairs)
+
+f_of_list = function(silabas, unica = TRUE){
+  if(unica){
+    names(silabas) = NULL
+    silabas = unlist(silabas, recursive = FALSE)
+  }
+  nomes = names(silabas)
+  index = match(nomes, pares_possiveis) 
+  if(any(is.na(index))){
+    silabas = silabas[!is.na(index)]
+    index = index[!is.na(index)]
+  }
+  lugares = rep(0, length(pares_possiveis))
+  lugares[index] = silabas
+  return(lugares)
+}
+
+lista = list()
+lista_palavras = list()
+
+count = 0
+
+for(file in list.files("Linguagens")){
+  count = count + 1
+  language = substr(file, 1, nchar(file)-4)
+  print(language)
+
+  path = file.path("Linguagens", file)
+  dados = readLines(path) |> stringr::str_split(",") |> unlist() |> iconv(to="ASCII//TRANSLIT")
+  dados = dados[nchar(dados) > 1]
+  dados = dados[sample(1:length(dados), 10000)]
+  lista_palavras[[count]] = dados
+  
+  dados = lapply(dados, get_letter_pairs)
+  dados = lapply(dados, f_of_list)
+  dados = do.call(rbind, dados) |> as.data.frame()
+  
+  dados$linguagem = language
+  
+  lista[[count]] = dados
+}
+
+dados = do.call(rbind, lista)
+lista_palavras = unlist(lista_palavras)
+```
+
+
+```{r}
+library(xgboost)
+library(tidyverse)
+
+set.seed(236081)
+
+colnames(dados)[1:676] = pares_possiveis
+
+x = as.matrix(dados[, 1:676])
+y = as.numeric(as.factor(dados[, 677])) - 1
+
+normalizar_por_frequencia <- function(x) {
+  freq_colunas <- colSums(x)
+  pesos <<- log1p(freq_colunas)  # log(1 + freq)
+  pesos[pesos == 0] <<- min(pesos[pesos > 0])
+  x_normalizado <- sweep(x, 2, pesos, FUN = "/")
+  return(x_normalizado)
+}
+x_normalizado <- normalizar_por_frequencia(x)
+
+normalizar <- function(x){
+  x_normalizado <- sweep(x, 2, pesos, FUN = "/")
+  return(x_normalizado)
+}
+
+idx = sample(1:nrow(x), 0.8*nrow(x))
+x_treino = x_normalizado[idx, ]
+x_teste = x_normalizado[-idx, ]
+
+aleatorio = sample(1:nrow(x_teste))
+x_teste = x_teste[aleatorio,]
+
+#x_treino = x[idx, ]
+y_treino = y[idx]
+#x_teste = x[-idx, ]
+y_teste = y[-idx]
+y_teste = y_teste[aleatorio]
+
+palavras_treino = lista_palavras[idx]
+palavras_teste = lista_palavras[-idx][aleatorio]
+
+dtreino = xgb.DMatrix(data = x_treino, label = y_treino)
+dteste = xgb.DMatrix(data = x_teste, label = y_teste)
+
+if(!exists("modelo", envir = .GlobalEnv)){
+  modelo = xgboost(
+    data = dtreino,
+    objective = "multi:softprob",  # <<<<<< ALTERADO
+    num_class = length(unique(y)),
+    nrounds = 100,
+    verbose = 0
+  )
+}
+
+```
+
+```{r}
+limpar_texto = function(txt) {
+  txt = tolower(txt)
+  txt = iconv(txt, from="UTF-8", to="ASCII//TRANSLIT")
+  txt = gsub("[^a-z ]", "", txt)
+  return(txt)
+}
+
+transf_frase = function(frase){
+  frase = limpar_texto(frase)
+  vetor = stringr::str_split(frase, " ")
+  vetor = unlist(vetor)
+  frequencias = get_letter_pairs(vetor)
+  unicidade = TRUE
+  if(length(vetor) > 1){
+    names(frequencias) = NULL
+    frequencias = unlist(frequencias, recursive = FALSE)
+    frequencias = tapply(frequencias, names(frequencias), sum)
+    unicidade = FALSE
+  }
+  linha = f_of_list(frequencias, unica = unicidade)
+  return(linha)
+}
+
+transf_frase = Vectorize(transf_frase)
+
+matrizar = function(frases){
+  numeros = transf_frase(frases) |> t() |> as.data.frame()
+  colnames(numeros) = pares_possiveis
+  numeros = normalizar(numeros)
+  return(numeros)
+}
+```
+
+```{r}
+predizer = function(modelo, dados){
+  predicoes = predict(modelo, dados, reshape = TRUE)
+  predicoes = predicoes %>% 
+    mutate(num_predicao = which.max(predicoes))
+}
+```
+
+
+```{r}
+predicoes <- predict(modelo, x_teste, reshape = TRUE)
+```
+
+```{r}
+
+```
+
